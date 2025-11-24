@@ -5,6 +5,18 @@ public class ClassicIOCacheWithLimit {
     private Map<String, FileCacheEntry> cache;
     private int maxSize;
 
+    private static class FileCacheEntry {
+        String content;
+        long lastReadTime;
+        long lastModifiedTimeAtRead;
+
+        FileCacheEntry(String content, long lastReadTime, long lastModifiedTimeAtRead) {
+            this.content = content;
+            this.lastReadTime = lastReadTime;
+            this.lastModifiedTimeAtRead = lastModifiedTimeAtRead;
+        }
+    }
+
     public ClassicIOCacheWithLimit(int maxSize) {
         this.maxSize = maxSize;
         this.cache = new HashMap<>();
@@ -16,6 +28,7 @@ public class ClassicIOCacheWithLimit {
 
     public String readFile(String filePath) throws IOException {
         File file = new File(filePath);
+
         if (!file.exists()) {
             throw new FileNotFoundException("Файл не существует: " + filePath);
         }
@@ -25,6 +38,7 @@ public class ClassicIOCacheWithLimit {
 
         if (cache.containsKey(absolutePath)) {
             FileCacheEntry cachedEntry = cache.get(absolutePath);
+
             if (isCacheValid(cachedEntry, currentModifiedTime)) {
                 cachedEntry.lastReadTime = System.currentTimeMillis();
                 return cachedEntry.content;
@@ -39,29 +53,30 @@ public class ClassicIOCacheWithLimit {
     }
 
     private String updateCache(File file, String absolutePath, long currentModifiedTime) throws IOException {
-        String content = readFileContent(file);
-        
         if (cache.size() >= maxSize) {
             removeOldestEntry();
         }
 
-        FileCacheEntry newEntry = new FileCacheEntry(content, System.currentTimeMillis(), currentModifiedTime);
-        cache.put(absolutePath, newEntry);
-        
+        String content = readFileContent(file);
+        long now = System.currentTimeMillis();
+
+        FileCacheEntry entry = new FileCacheEntry(content, now, currentModifiedTime);
+        cache.put(absolutePath, entry);
+
         return content;
     }
 
     private void removeOldestEntry() {
         String oldestKey = null;
         long oldestTime = Long.MAX_VALUE;
-        
+
         for (Map.Entry<String, FileCacheEntry> entry : cache.entrySet()) {
             if (entry.getValue().lastReadTime < oldestTime) {
                 oldestTime = entry.getValue().lastReadTime;
                 oldestKey = entry.getKey();
             }
         }
-        
+
         if (oldestKey != null) {
             cache.remove(oldestKey);
         }
@@ -69,20 +84,20 @@ public class ClassicIOCacheWithLimit {
 
     private String readFileContent(File file) throws IOException {
         StringBuilder content = new StringBuilder();
-        try (FileReader fileReader = new FileReader(file);
-             BufferedReader reader = new BufferedReader(fileReader, 8192)) {
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(file), 8192)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 content.append(line).append("\n");
             }
         }
+
         return content.toString();
     }
 
     public void invalidate(String filePath) {
         File file = new File(filePath);
-        String absolutePath = file.getAbsolutePath();
-        cache.remove(absolutePath);
+        cache.remove(file.getAbsolutePath());
     }
 
     public void invalidateAll() {
@@ -91,8 +106,7 @@ public class ClassicIOCacheWithLimit {
 
     public boolean isCached(String filePath) {
         File file = new File(filePath);
-        String absolutePath = file.getAbsolutePath();
-        return cache.containsKey(absolutePath);
+        return cache.containsKey(file.getAbsolutePath());
     }
 
     public int getCachedFilesCount() {
@@ -102,7 +116,7 @@ public class ClassicIOCacheWithLimit {
     public long getCacheSizeInMemory() {
         long size = 0;
         for (FileCacheEntry entry : cache.values()) {
-            size += entry.content.length() * 2L;
+            size += entry.content.length() * 2;
         }
         return size;
     }
@@ -113,74 +127,30 @@ public class ClassicIOCacheWithLimit {
         System.out.println("Размер в памяти: " + getCacheSizeInMemory() + " байт");
         System.out.println("Максимальный размер: " + maxSize + " файлов");
         System.out.println("Закэшированные файлы:");
-        
+
         for (Map.Entry<String, FileCacheEntry> entry : cache.entrySet()) {
             String fileName = new File(entry.getKey()).getName();
-            long fileSize = entry.getValue().content.length() * 2L;
+            long fileSize = entry.getValue().content.length() * 2;
             String lastRead = new Date(entry.getValue().lastReadTime).toString();
             System.out.println("  " + fileName + " - " + fileSize + " байт, прочитан: " + lastRead);
         }
     }
 
-    private static class FileCacheEntry {
-        String content;
-        long lastReadTime;
-        long lastModifiedTimeAtRead;
+    public static void main(String[] args) throws Exception {
+        ClassicIOCacheWithLimit cache = new ClassicIOCacheWithLimit(2);
 
-        FileCacheEntry(String content, long lastReadTime, long lastModifiedTimeAtRead) {
-            this.content = content;
-            this.lastReadTime = lastReadTime;
-            this.lastModifiedTimeAtRead = lastModifiedTimeAtRead;
-        }
-    }
+        System.out.println(cache.readFile("1.txt"));
+        System.out.println(cache.readFile("2.txt"));
 
-    public static void main(String[] args) {
-        try {
-            ClassicIOCacheWithLimit cache = new ClassicIOCacheWithLimit(3);
-            
-            File testFile1 = new File("test1.txt");
-            File testFile2 = new File("test2.txt");
-            File testFile3 = new File("test3.txt");
-            File testFile4 = new File("test4.txt");
-            
-            try (PrintWriter writer = new PrintWriter(testFile1)) {
-                writer.println("Содержимое файла 1");
-            }
-            try (PrintWriter writer = new PrintWriter(testFile2)) {
-                writer.println("Содержимое файла 2");
-            }
-            try (PrintWriter writer = new PrintWriter(testFile3)) {
-                writer.println("Содержимое файла 3");
-            }
-            try (PrintWriter writer = new PrintWriter(testFile4)) {
-                writer.println("Содержимое файла 4");
-            }
-            
-            System.out.println("Первое чтение файлов:");
-            cache.readFile("test1.txt");
-            cache.readFile("test2.txt");
-            cache.readFile("test3.txt");
-            cache.printCacheStats();
-            
-            System.out.println("\nЧтение файла 4 (должен вытеснить самый старый):");
-            cache.readFile("test4.txt");
-            cache.printCacheStats();
-            
-            System.out.println("\nПовторное чтение файла 2 (из кэша):");
-            cache.readFile("test2.txt");
-            cache.printCacheStats();
-            
-            System.out.println("\nОчистка кэша:");
-            cache.invalidate("test2.txt");
-            cache.printCacheStats();
-            
-            testFile1.delete();
-            testFile2.delete();
-            testFile3.delete();
-            testFile4.delete();
-            
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        cache.printCacheStats();
+
+        System.out.println(cache.readFile("3.txt")); 
+        cache.printCacheStats();
+
+        cache.invalidate("2.txt");
+        cache.printCacheStats();
+
+        cache.invalidateAll();
+        cache.printCacheStats();
     }
 }
